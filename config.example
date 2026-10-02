@@ -1,0 +1,4 @@
+# manual: two matching non-RU probes are required AND a manual 15-minute approval.
+# auto: two matching non-RU probes permit access automatically (split routing risk).
+MODE=auto
+INTERVAL=10

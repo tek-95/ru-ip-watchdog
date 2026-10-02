@@ -1,32 +1,42 @@
-# install.ps1 — установка ru-ip-watchdog на Windows.
-# Два способа:
-#   1) из корня склонированного репозитория (admin PowerShell):
-#      Set-ExecutionPolicy Bypass -Scope Process -Force
-#      .\install.ps1
-#   2) одной строкой без скачивания репо (см. README)
-# Удаление: .\uninstall.ps1 или Unregister-ScheduledTask -TaskName ru-ip-watchdog -Confirm:$false
-
+[CmdletBinding()]
+param([switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
-$Dir = 'C:\ProgramData\ru-ip-watchdog'
+$Dir = Join-Path $env:ProgramData 'ru-ip-watchdog'
 $RepoRaw = 'https://raw.githubusercontent.com/tek-95/ru-ip-watchdog/main'
-
-if (Test-Path "$PSScriptRoot\ru-ip-watchdog.ps1") {
-    Copy-Item "$PSScriptRoot\ru-ip-watchdog.ps1" "$Dir\ru-ip-watchdog.ps1" -Force
-} else {
-    if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Force -Path $Dir | Out-Null }
-    Invoke-WebRequest "$RepoRaw/ru-ip-watchdog.ps1" -OutFile "$Dir\ru-ip-watchdog.ps1" -UseBasicParsing
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run PowerShell as administrator.' }
+if ($Uninstall) {
+    Stop-ScheduledTask -TaskName 'ru-ip-watchdog' -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName 'ru-ip-watchdog' -Confirm:$false -ErrorAction SilentlyContinue
+    . (Join-Path $Dir 'ru-ip-watchdog.ps1')
+    Set-Hosts $false
+    Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object Name -eq $RuleName | Remove-NetFirewallRule
+    Remove-Item $Dir -Recurse -Force
+    Write-Host 'Removed hosts entries, firewall rule, task and files.'; return
 }
-if (-not (Test-Path "$Dir")) { New-Item -ItemType Directory -Force -Path $Dir | Out-Null }
-
-$Action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
-           -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Dir\ru-ip-watchdog.ps1`""
-$Trigger = New-ScheduledTaskTrigger -AtBoot
-$Settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-            -ExecutionTimeLimit (New-TimeSpan -Days 3650) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-$Principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
-
-Register-ScheduledTask -TaskName 'ru-ip-watchdog' -Action $Action -Trigger $Trigger `
-    -Settings $Settings -Principal $Principal -Force | Out-Null
-Start-ScheduledTask -TaskName 'ru-ip-watchdog'
-Write-Host "Installed and started. Log: $Dir\guard.log"
-Write-Host 'Uninstall: run uninstall.ps1 (or Unregister-ScheduledTask -TaskName ru-ip-watchdog -Confirm:$false)'
+$stage = Join-Path $env:TEMP ([guid]::NewGuid().ToString())
+New-Item -ItemType Directory $stage | Out-Null
+try {
+    foreach ($file in @('ru-ip-watchdog.ps1','domains.txt','cidrs.txt','config.example','install.ps1')) {
+        if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot $file))) { Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $stage $file) }
+        else { Invoke-WebRequest "$RepoRaw/$file" -OutFile (Join-Path $stage $file) -UseBasicParsing }
+    }
+    $tokens = $null; $errors = $null
+    [Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'ru-ip-watchdog.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+    if ($errors.Count) { throw "Downloaded script is invalid: $errors" }
+    Stop-ScheduledTask -TaskName 'ru-ip-watchdog' -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory $Dir -Force | Out-Null
+    # Scripts executed as SYSTEM must not be writable by ordinary users.
+    & icacls.exe $Dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to secure installation directory.' }
+    foreach ($file in @('ru-ip-watchdog.ps1','domains.txt','cidrs.txt','install.ps1')) { Copy-Item (Join-Path $stage $file) (Join-Path $Dir $file) -Force }
+    if (-not (Test-Path (Join-Path $Dir 'config'))) { Copy-Item (Join-Path $stage 'config.example') (Join-Path $Dir 'config') }
+    $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Dir\ru-ip-watchdog.ps1`""
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    Register-ScheduledTask -TaskName 'ru-ip-watchdog' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+    Start-ScheduledTask -TaskName 'ru-ip-watchdog'
+    Write-Host "Installed. Check health: & '$Dir\ru-ip-watchdog.ps1' -Status"
+    Write-Host "Log: $Dir\guard.log. Default mode: auto."
+} finally { Remove-Item $stage -Recurse -Force }

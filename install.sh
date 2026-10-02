@@ -1,38 +1,52 @@
 #!/bin/bash
-# install.sh — установка ru-ip-watchdog на macOS одной командой.
-# Работает двумя способами:
-#   1) bash install.sh из корня склонированного репозитория
-#   2) curl -fsSL <raw>/install.sh | bash — сам скачает остальные файлы
-# Требует sudo (спросит пароль один раз).
-
-set -e
-DIR="/Library/Application Support/ru-ip-watchdog"
-PLIST="/Library/LaunchDaemons/com.user.ru-ip-watchdog.plist"
-REPO_RAW="https://raw.githubusercontent.com/tek-95/ru-ip-watchdog/main"
-
-# определить, где лежат файлы: рядом со скриптом или качать из репо
-SRC="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
-if [ -f "$SRC/ru-ip-watchdog.sh" ] && [ -f "$SRC/com.user.ru-ip-watchdog.plist" ]; then
-    GET_SH()    { cat "$SRC/ru-ip-watchdog.sh"; }
-    GET_PLIST() { cat "$SRC/com.user.ru-ip-watchdog.plist"; }
-else
-    command -v curl >/dev/null || { echo "нужен curl"; exit 1; }
-    GET_SH()    { curl -fsSL "$REPO_RAW/ru-ip-watchdog.sh"; }
-    GET_PLIST() { curl -fsSL "$REPO_RAW/com.user.ru-ip-watchdog.plist"; }
+set -euo pipefail
+DIR='/Library/Application Support/ru-ip-watchdog'
+STATE=/var/db/ru-ip-watchdog
+PLIST=/Library/LaunchDaemons/com.user.ru-ip-watchdog.plist
+PFCONF=/etc/pf.conf
+TAG='# ru-ip-watchdog:pf'
+RAW='https://raw.githubusercontent.com/tek-95/ru-ip-watchdog/main'
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+if [ "${1:-}" = --uninstall ]; then
+    sudo launchctl bootout system "$PLIST" 2>/dev/null || true
+    # Installed daemon owns only its table and marked hosts section.
+    sudo bash "$DIR/cleanup.sh"
+    sudo rm -f "$PLIST"
+    sudo rm -rf "$DIR" "$STATE"
+    echo 'Removed. Logs remain in /var/log/ru-ip-watchdog.log.'
+    exit
 fi
-
-# снести старую версию, если была
+[ -z "${1:-}" ] || { echo 'Usage: install.sh [--uninstall]' >&2; exit 1; }
+for f in ru-ip-watchdog.sh cleanup.sh domains.txt cidrs.txt config.example com.user.ru-ip-watchdog.plist install.sh pf-config.awk; do
+    if [ -f "$SRC/$f" ]; then cp "$SRC/$f" "$STAGE/$f"
+    else curl --fail --silent --show-error --proto '=https' --tlsv1.2 "$RAW/$f" -o "$STAGE/$f"; fi
+done
+bash -n "$STAGE/ru-ip-watchdog.sh" "$STAGE/cleanup.sh"
+plutil -lint "$STAGE/com.user.ru-ip-watchdog.plist"
+# Prepare and validate BEFORE stopping the installed guard.
+awk '!/^#/ && NF {print $1}' "$STAGE/cidrs.txt" > "$STAGE/addresses"
+# Insert the direct quick block before any existing filtering rule, after NAT.
+awk -f "$STAGE/pf-config.awk" "$PFCONF" > "$STAGE/pf.conf"
+sudo -v
+sudo mkdir -p /etc/pf.anchors "$STATE"
+sudo chmod 700 "$STATE"
+# Seed persistent boot rules. Keep previously resolved addresses on upgrades.
+if sudo test -f "$STATE/targets"; then sudo cat "$STATE/targets" >> "$STAGE/addresses"; fi
+sudo install -o root -g wheel -m 600 "$STAGE/addresses" /etc/pf.anchors/ru-ip-watchdog-addresses
+sudo pfctl -nf "$STAGE/pf.conf"
+echo 'Installing PF rules reloads the main ruleset. Reconnect other VPNs afterward if needed.'
 sudo launchctl bootout system "$PLIST" 2>/dev/null || true
-sudo rm -f "$PLIST"
-
-# почистить hosts от возможных старых секций
-sudo sed -i '' '/^# ru-ip-watchdog:begin$/,/^# ru-ip-watchdog:end$/d' /etc/hosts 2>/dev/null || true
-
 sudo mkdir -p "$DIR"
-GET_SH    | sudo tee "$DIR/ru-ip-watchdog.sh" >/dev/null
-GET_PLIST | sudo tee "$PLIST" >/dev/null
-sudo chmod +x "$DIR/ru-ip-watchdog.sh"
+sudo chmod 755 "$DIR"
+for f in ru-ip-watchdog.sh cleanup.sh install.sh domains.txt cidrs.txt; do sudo install -o root -g wheel -m 644 "$STAGE/$f" "$DIR/$f"; done
+if ! sudo test -f "$DIR/config"; then sudo install -o root -g wheel -m 600 "$STAGE/config.example" "$DIR/config"; fi
+sudo install -o root -g wheel -m 644 "$STAGE/com.user.ru-ip-watchdog.plist" "$PLIST"
+sudo cp "$PFCONF" "$STATE/pf.conf.before-install"
+sudo install -o root -g wheel -m 644 "$STAGE/pf.conf" "$PFCONF"
+sudo pfctl -f "$PFCONF"
+sudo rm -rf "$STATE/lock"
 sudo launchctl bootstrap system "$PLIST"
-
-echo "Установлено и запущено. Лог: ~/Library/Logs/ru-ip-watchdog.log"
-echo "Удалить: bash $(basename "$0") --uninstall (или см. README)"
+echo 'Installed. Check actual health: sudo bash "/Library/Application Support/ru-ip-watchdog/ru-ip-watchdog.sh" --status'
+echo 'Logs: /var/log/ru-ip-watchdog.log. Default mode: auto.'

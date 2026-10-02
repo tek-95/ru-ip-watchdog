@@ -1,0 +1,4 @@
+# Supplemental ranges from the original project; not an exhaustive inventory.
+160.79.104.0/21
+8.47.69.0/24
+8.6.112.0/24
