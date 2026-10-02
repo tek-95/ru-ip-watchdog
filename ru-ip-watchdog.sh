@@ -171,7 +171,8 @@ main() {
         rm -f "$STATE_DIR/lock/pid"; rmdir "$STATE_DIR/lock"; mkdir "$STATE_DIR/lock"
     fi
     echo "$$" > "$STATE_DIR/lock/pid"
-    trap '[ -z "$refresh_pid" ] || kill "$refresh_pid" 2>/dev/null || true; rm -f "$STATE_DIR/lock/pid"; rmdir "$STATE_DIR/lock"' EXIT
+    trap '[ -z "${refresh_pid:-}" ] || kill "$refresh_pid" 2>/dev/null || true; rm -f "$STATE_DIR/lock/pid"; rmdir "$STATE_DIR/lock"' EXIT
+    trap 'exit 143' TERM INT
     # Never begin in an assumed-safe state. Restore block after crashes/restarts.
     [ -f "$STATE_DIR/targets" ] || base_targets > "$STATE_DIR/targets"
     set_block 1 || { write_status ERROR startup UNKNOWN; return 1; }

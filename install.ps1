@@ -5,8 +5,18 @@ $Dir = Join-Path $env:ProgramData 'ru-ip-watchdog'
 $RepoRaw = 'https://raw.githubusercontent.com/tek-95/ru-ip-watchdog/main'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run PowerShell as administrator.' }
+function Stop-InstalledGuard {
+    $task = Get-ScheduledTask -TaskName 'ru-ip-watchdog' -ErrorAction SilentlyContinue
+    if (-not $task) { return }
+    Stop-ScheduledTask -TaskName 'ru-ip-watchdog'
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        if ((Get-ScheduledTask -TaskName 'ru-ip-watchdog').State -ne 'Running') { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'Guard did not stop; installation files were not changed.'
+}
 if ($Uninstall) {
-    Stop-ScheduledTask -TaskName 'ru-ip-watchdog' -ErrorAction SilentlyContinue
+    Stop-InstalledGuard
     Unregister-ScheduledTask -TaskName 'ru-ip-watchdog' -Confirm:$false -ErrorAction SilentlyContinue
     . (Join-Path $Dir 'ru-ip-watchdog.ps1')
     Set-Hosts $false
@@ -24,7 +34,7 @@ try {
     $tokens = $null; $errors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $stage 'ru-ip-watchdog.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
     if ($errors.Count) { throw "Downloaded script is invalid: $errors" }
-    Stop-ScheduledTask -TaskName 'ru-ip-watchdog' -ErrorAction SilentlyContinue
+    Stop-InstalledGuard
     New-Item -ItemType Directory $Dir -Force | Out-Null
     # Scripts executed as SYSTEM must not be writable by ordinary users.
     & icacls.exe $Dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
