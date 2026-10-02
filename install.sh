@@ -21,13 +21,11 @@ else
     GET_PLIST() { curl -fsSL "$REPO_RAW/com.user.ru-ip-watchdog.plist"; }
 fi
 
-# снести старую версию, если была (в т.ч. codex-guard)
+# снести старую версию, если была
 sudo launchctl bootout system "$PLIST" 2>/dev/null || true
-sudo launchctl bootout system /Library/LaunchDaemons/com.user.codex-guard.plist 2>/dev/null || true
-sudo rm -f "$PLIST" /Library/LaunchDaemons/com.user.codex-guard.plist
+sudo rm -f "$PLIST"
 
 # почистить hosts от возможных старых секций
-sudo sed -i '' '/^# codex-guard:begin$/,/^# codex-guard:end$/d' /etc/hosts 2>/dev/null || true
 sudo sed -i '' '/^# ru-ip-watchdog:begin$/,/^# ru-ip-watchdog:end$/d' /etc/hosts 2>/dev/null || true
 
 sudo mkdir -p "$DIR"
