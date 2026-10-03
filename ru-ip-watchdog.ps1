@@ -8,7 +8,7 @@ $HostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
 $LogFile   = 'C:\ProgramData\ru-ip-watchdog\guard.log'
 $BeginTag  = '# ru-ip-watchdog:begin'
 $EndTag    = '# ru-ip-watchdog:end'
-$Interval  = 10
+$Interval  = 5
 
 $Domains = @(
     'openai.com','api.openai.com','auth.openai.com','auth0.openai.com',

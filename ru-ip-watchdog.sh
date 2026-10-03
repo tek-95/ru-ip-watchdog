@@ -9,7 +9,7 @@ LOGERR="/Users/macbook/Library/Logs/ru-ip-watchdog.err"
 HOSTS=/etc/hosts
 BEGIN="# ru-ip-watchdog:begin"
 END="# ru-ip-watchdog:end"
-CHECK_INTERVAL=10
+CHECK_INTERVAL=5
 DOMAINS="openai.com api.openai.com auth.openai.com auth0.openai.com platform.openai.com status.openai.com cdn.openai.com chatgpt.com ab.chatgpt.com chatgpt-live.fastedge.io oaistatic.com oaiusercontent.com anthropic.com api.anthropic.com console.anthropic.com claude.ai claude.com claude.site statsig.anthropic.com statsig.com api.statsig.com sentry.io o1137834.ingest.sentry.io gemini.google.com bard.google.com aistudio.google.com generativelanguage.googleapis.com alkalimakersuite-pa.googleapis.com wise.com transferwise.com airbnb.com api.zebra.airbnb.com muscache.com revolut.com www.revolut.com api.revolut.com app.revolut.com"
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
@@ -70,11 +70,17 @@ block_off() {
 log "ru-ip-watchdog started (pid $$, mode: hosts+pf)"
 notify "Страж запущен"
 
+# Старт в блоке: никогда не начинаем в предполагаемо-безопасном состоянии.
+# Первая же успешная проверка снимет блок, если выход не RU.
+block_on
+log "startup — BLOCKED until first probe"
+
 while true; do
     LOC=$(exit_country)
 
     if [ -z "$LOC" ]; then
-        log "no connectivity, idle"
+        # сети нет: держим блок (fail closed), наружу к сервисам всё равно не идёт
+        is_blocked || block_on
         sleep "$CHECK_INTERVAL"
         continue
     fi
