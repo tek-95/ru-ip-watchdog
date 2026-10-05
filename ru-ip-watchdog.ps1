@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$Status, [switch]$Approve)
 $ErrorActionPreference = 'Stop'
 $Dir = Join-Path $env:ProgramData 'ru-ip-watchdog'
@@ -98,7 +98,21 @@ function Set-Block([bool]$On, [string[]]$Addresses) {
         if ($live.Enabled -ne 'True' -or $live.Action -ne 'Block' -or $live.Direction -ne 'Outbound') { throw 'Firewall rule is not active.' }
         if (($live | Get-NetFirewallPortFilter).Protocol -ne 'Any' -or $live.Profile -ne 'Any') { throw 'Firewall protocol or profile is incomplete.' }
         $actual = @(($live | Get-NetFirewallAddressFilter).RemoteAddress | Sort-Object -Unique)
-        if (Compare-Object (@($Addresses | Sort-Object -Unique)) $actual) { throw 'Active firewall addresses differ from requested addresses.' }
+        $expected = @($Addresses | ForEach-Object {
+            $value = $_
+            if ($value -match '^([0-9.]+)/([0-9]{1,2})$') {
+                $ip = $Matches[1]; $prefix = [int]$Matches[2]
+                if ($prefix -ge 0 -and $prefix -le 32) {
+                    $mask = for ($octet = 0; $octet -lt 4; $octet++) {
+                        $bits = [Math]::Min(8, [Math]::Max(0, $prefix - 8 * $octet))
+                        [int](256 - [Math]::Pow(2, 8 - $bits))
+                    }
+                    $value = $ip + '/' + ($mask -join '.')
+                }
+            }
+            $value
+        } | Sort-Object -Unique)
+        if (Compare-Object $expected $actual) { throw 'Active firewall addresses differ from requested addresses.' }
     } else {
         # Hosts first, firewall last: errors should preserve the network block.
         Set-Hosts $false
